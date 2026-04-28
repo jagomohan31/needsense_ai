@@ -1,0 +1,84 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helper Functions ──────────────────────────────────────
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return request.auth.uid == uid;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && getUserData().role == 'admin';
+    }
+
+    function isVolunteer() {
+      return isAuthenticated() && getUserData().role == 'volunteer';
+    }
+
+    // ── Users Collection ──────────────────────────────────────
+    match /users/{userId} {
+      // Anyone can read volunteer profiles (for matching)
+      allow read: if isAuthenticated();
+      // Users can only write their own profile
+      allow create: if isAuthenticated() && isOwner(userId);
+      allow update: if isAuthenticated() && (isOwner(userId) || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // ── Requests Collection ───────────────────────────────────
+    match /requests/{requestId} {
+      // All authenticated users can read requests
+      allow read: if isAuthenticated();
+      // Admins can create, update, delete
+      allow create: if isAdmin();
+      allow update: if isAdmin() || (
+        // Volunteers can update status if assigned to them
+        isVolunteer() && 
+        resource.data.assignedTo == request.auth.uid
+      );
+      allow delete: if isAdmin();
+    }
+
+    // ── Assignments Collection ────────────────────────────────
+    match /assignments/{assignmentId} {
+      // Admins and the assigned volunteer can read
+      allow read: if isAuthenticated() && (
+        isAdmin() || resource.data.volunteerId == request.auth.uid
+      );
+      // Only admins can create assignments
+      allow create: if isAdmin();
+      // Admins or the assigned volunteer can update
+      allow update: if isAdmin() || (
+        isVolunteer() && resource.data.volunteerId == request.auth.uid
+      );
+      allow delete: if isAdmin();
+    }
+
+    // ── Notifications Collection ──────────────────────────────
+    match /notifications/{notifId} {
+      // Users can only read their own notifications
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      // System creates notifications (via admin SDK) or admin can
+      allow create: if isAuthenticated();
+      // Users can mark their own as read
+      allow update: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow delete: if isAuthenticated() && (
+        isAdmin() || resource.data.userId == request.auth.uid
+      );
+    }
+
+    // ── Analytics Collection ──────────────────────────────────
+    match /analytics/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+  }
+}
